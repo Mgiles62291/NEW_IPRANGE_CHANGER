@@ -1,37 +1,246 @@
-name: Build EXE
+import sys
+import subprocess
+import json
+import os
+import re
+from pathlib import Path
 
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  workflow_dispatch:
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
-    - name: Build with PyInstaller
-      run: pyinstaller --onefile --windowed netmotive_ip_range_changer.py
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Netmotive_IP_Range_Changer.exe
-        path: dist/netmotive_ip_range_changer.exe
-    - name: Release on tag
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ github.ref_name }}
-        name: Release ${{ github.ref_name }}
-        draft: false
-        prerelease: false
-        files: dist/netmotive_ip_range_changer.exe
+APP_NAME = "Netmotive IP Range Changer"
+PROFILE_FILE = Path("profiles.json")
+
+# --------------------- Utility helpers --------------------------------------
+
+def run_netsh(cmd: list[str]):
+    """Run a netsh command & surfacing stderr in a dialog on failure."""
+    try:
+        subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        QMessageBox.critical(None, "Netsh Error", f"Command failed: {' '.join(cmd)}\n\n{exc.stderr}")
+        raise
+
+
+def get_adapters() -> list[str]:
+    """Return a list of interface names that look like physical NICs."""
+    output = subprocess.check_output("netsh interface show interface", shell=True, text=True)
+    adapters: list[str] = []
+    for line in output.splitlines():
+        if any(tag in line for tag in ("Dedicated", "Ethernet", "Wi-Fi")):
+            adapters.append(line.split()[-1])  # interface name is last column
+    return adapters or ["Ethernet"]
+
+
+def load_profiles() -> dict:
+    if PROFILE_FILE.exists():
+        try:
+            return json.loads(PROFILE_FILE.read_text())
+        except Exception:
+            QMessageBox.warning(None, APP_NAME, "profiles.json corrupt – starting fresh.")
+    return {}
+
+
+def save_profiles(profiles: dict):
+    PROFILE_FILE.write_text(json.dumps(profiles, indent=2))
+
+
+def apply_profile(adapter: str, profile):
+    """Apply (static or DHCP) profile to adapter via netsh."""
+    if profile == "dhcp":
+        run_netsh(["netsh", "interface", "ip", "set", "address", adapter, "dhcp"])
+        run_netsh(["netsh", "interface", "ip", "set", "dns", adapter, "dhcp"])
+        return
+
+    run_netsh([
+        "netsh", "interface", "ip", "set", "address", adapter, "static",
+        profile["ip"], profile["mask"], profile["gateway"]
+    ])
+    run_netsh([
+        "netsh", "interface", "ip", "set", "dns", adapter, "static", profile["dns"]
+    ])
+
+# ------------------------- Main Window --------------------------------------
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(APP_NAME)
+        self.setMinimumSize(600, 480)
+        self.setStyleSheet(self.futuristic_stylesheet())
+
+        # ------------------- Data -------------------
+        self.profiles: dict = load_profiles()
+
+        # ------------------- Widgets ---------------
+        self.adapterBox = QComboBox()
+        self.adapterBox.addItems(get_adapters())
+
+        self.profileList = QListWidget()
+        self.refresh_profile_list()
+
+        self.profileNameEdit = QLineEdit()
+        self.profileNameEdit.setPlaceholderText("Profile Name")
+
+        self.ipEdit = QLineEdit();      self.ipEdit.setPlaceholderText("e.g. 192.168.1.50")
+        self.maskEdit = QLineEdit();    self.maskEdit.setPlaceholderText("e.g. 255.255.255.0")
+        self.gatewayEdit = QLineEdit(); self.gatewayEdit.setPlaceholderText("e.g. 192.168.1.1")
+        self.dnsEdit = QLineEdit();     self.dnsEdit.setPlaceholderText("e.g. 8.8.8.8")
+
+        self.applyBtn   = QPushButton("Apply Selected")
+        self.addBtn     = QPushButton("Add Profile")
+        self.updateBtn  = QPushButton("Update Profile")
+        self.deleteBtn  = QPushButton("Delete Profile")
+        self.dhcpBtn    = QPushButton("Add DHCP Profile")
+
+        # ------------------- Layout ----------------
+        rootLayout = QVBoxLayout()
+
+        # adapter row
+        adapterRow = QHBoxLayout()
+        adapterRow.addWidget(QLabel("Adapter:"))
+        adapterRow.addWidget(self.adapterBox)
+        adapterRow.addStretch()
+        rootLayout.addLayout(adapterRow)
+
+        # list + fields
+        rootLayout.addWidget(QLabel("Saved Profiles"))
+        rootLayout.addWidget(self.profileList, stretch=1)
+
+        rootLayout.addWidget(self.profileNameEdit)
+        rootLayout.addWidget(self.ipEdit)
+        rootLayout.addWidget(self.maskEdit)
+        rootLayout.addWidget(self.gatewayEdit)
+        rootLayout.addWidget(self.dnsEdit)
+
+        # button row
+        btnRow = QHBoxLayout()
+        for b in (self.applyBtn, self.addBtn, self.updateBtn, self.deleteBtn, self.dhcpBtn):
+            btnRow.addWidget(b)
+        rootLayout.addLayout(btnRow)
+
+        container = QWidget(); container.setLayout(rootLayout)
+        self.setCentralWidget(container)
+
+        # ------------------- Signals ---------------
+        self.profileList.itemClicked.connect(self.load_selected_profile)
+        self.applyBtn.clicked.connect(self.apply_selected)
+        self.addBtn.clicked.connect(self.add_profile)
+        self.updateBtn.clicked.connect(self.update_profile)
+        self.deleteBtn.clicked.connect(self.delete_profile)
+        self.dhcpBtn.clicked.connect(self.add_dhcp_profile)
+
+    # ------------------- Slots --------------------
+    def refresh_profile_list(self):
+        self.profileList.clear()
+        for name in self.profiles:
+            self.profileList.addItem(name)
+
+    def load_selected_profile(self, item: QListWidgetItem):
+        name = item.text()
+        self.profileNameEdit.setText(name)
+        profile = self.profiles[name]
+        if profile == "dhcp":
+            for edit in (self.ipEdit, self.maskEdit, self.gatewayEdit, self.dnsEdit):
+                edit.clear()
+            return
+        self.ipEdit.setText(profile.get("ip", ""))
+        self.maskEdit.setText(profile.get("mask", ""))
+        self.gatewayEdit.setText(profile.get("gateway", ""))
+        self.dnsEdit.setText(profile.get("dns", ""))
+
+    # ---------- CRUD operations -------------
+    def add_profile(self):
+        name = self.profileNameEdit.text().strip()
+        if not name:
+            QMessageBox.warning(self, APP_NAME, "Profile name required.")
+            return
+        if name in self.profiles:
+            QMessageBox.warning(self, APP_NAME, "Profile already exists – use Update instead.")
+            return
+        self.profiles[name] = self.collect_profile_fields()
+        save_profiles(self.profiles)
+        self.refresh_profile_list()
+
+    def update_profile(self):
+        name = self.profileNameEdit.text().strip()
+        if not name or name not in self.profiles:
+            QMessageBox.warning(self, APP_NAME, "Select an existing profile to update.")
+            return
+        self.profiles[name] = self.collect_profile_fields()
+        save_profiles(self.profiles)
+        self.refresh_profile_list()
+
+    def delete_profile(self):
+        item = self.profileList.currentItem()
+        if not item:
+            return
+        name = item.text()
+        if QMessageBox.question(self, APP_NAME, f"Delete '{name}'?") == QMessageBox.Yes:
+            del self.profiles[name]
+            save_profiles(self.profiles)
+            self.refresh_profile_list()
+
+    def add_dhcp_profile(self):
+        name = self.profileNameEdit.text().strip() or "DHCP"
+        if name in self.profiles:
+            QMessageBox.warning(self, APP_NAME, "Name exists – choose another.")
+            return
+        self.profiles[name] = "dhcp"
+        save_profiles(self.profiles)
+        self.refresh_profile_list()
+
+    # ---------- Apply -----------------------
+    def apply_selected(self):
+        item = self.profileList.currentItem()
+        if not item:
+            QMessageBox.information(self, APP_NAME, "Select a profile first.")
+            return
+        adapter = self.adapterBox.currentText()
+        apply_profile(adapter, self.profiles[item.text()])
+        QMessageBox.information(self, APP_NAME, f"Profile '{item.text()}' applied to {adapter}.")
+
+    # ---------- Helpers ---------------------
+    def collect_profile_fields(self) -> dict:
+        return {
+            "ip": self.ipEdit.text().strip(),
+            "mask": self.maskEdit.text().strip(),
+            "gateway": self.gatewayEdit.text().strip(),
+            "dns": self.dnsEdit.text().strip()
+        }
+
+    # ------------------- Style --------------
+    @staticmethod
+    def futuristic_stylesheet() -> str:
+        return (
+            "*{color:#C8E6FA;font-family:'Segoe UI';font-size:13px;}"
+            "QMainWindow{background-color:#0d1117;}"
+            "QLabel{color:#58A6FF;}"
+            "QLineEdit,QListWidget,QComboBox{background-color:#161B22;border:1px solid #30363d;border-radius:4px;padding:4px;}"
+            "QPushButton{background-color:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px;}"
+            "QPushButton:hover{background-color:#30363d;}"
+            "QPushButton:pressed{background-color:#10567b;}"
+        )
+
+# ------------------------- Entry --------------------------------------------
+
+def main():
+    app = QApplication(sys.argv)
+    wnd = MainWindow(); wnd.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
