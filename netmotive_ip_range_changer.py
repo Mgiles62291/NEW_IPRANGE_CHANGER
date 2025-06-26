@@ -3,6 +3,7 @@ import subprocess
 import json
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -21,11 +22,12 @@ from PySide6.QtGui import QIcon, QPixmap
 
 APP_NAME = "Netmotive IP Range Changer"
 PROFILE_FILE = Path("profiles.json")
-LOGO_FILE = Path(__file__).with_name("logo.png")  # drop a 256×256 PNG next to the script
+LOGO_FILE = Path(__file__).with_name("logo.png")  # optional 256×256 PNG next to script
 
 # --------------------- Utility helpers --------------------------------------
 
 def run_netsh(cmd: list[str]):
+    """Run a netsh command and surface stderr if it fails."""
     try:
         completed = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
         return completed.stdout.strip()
@@ -35,6 +37,7 @@ def run_netsh(cmd: list[str]):
 
 
 def get_adapters() -> list[str]:
+    """Return interface names (including those with spaces)."""
     output = subprocess.check_output("netsh interface show interface", shell=True, text=True)
     adapters = []
     for line in output.splitlines():
@@ -97,7 +100,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         if LOGO_FILE.exists():
             self.setWindowIcon(QIcon(str(LOGO_FILE)))
-        self.setMinimumSize(680, 540)
+        self.setMinimumSize(700, 560)
         self.setStyleSheet(self.futuristic_stylesheet())
 
         self.profiles: dict = load_profiles()
@@ -121,10 +124,10 @@ class MainWindow(QMainWindow):
         # Layout
         layout = QVBoxLayout()
 
-        # Logo banner (if available)
+        # Logo banner
         if LOGO_FILE.exists():
-            logo_label = QLabel(); logo_label.setAlignment(Qt.AlignCenter)
-            pix = QPixmap(str(LOGO_FILE)).scaledToHeight(64, mode=Qt.SmoothTransformation)
+            logo_label = QLabel(alignment=Qt.AlignCenter)
+            pix = QPixmap(str(LOGO_FILE)).scaledToHeight(64, Qt.SmoothTransformation)
             logo_label.setPixmap(pix)
             layout.addWidget(logo_label)
 
@@ -136,6 +139,7 @@ class MainWindow(QMainWindow):
         for b in (self.applyBtn, self.addBtn, self.updateBtn, self.deleteBtn, self.dhcpBtn):
             btns.addWidget(b)
         layout.addLayout(btns)
+
         container = QWidget(); container.setLayout(layout); self.setCentralWidget(container)
 
         # Signals
@@ -153,23 +157,27 @@ class MainWindow(QMainWindow):
             self.profileList.addItem(name)
 
     def load_selected_profile(self, item: QListWidgetItem):
-        name = item.text(); self.profileNameEdit.setText(name)
+        name = item.text()
+        self.profileNameEdit.setText(name)
         prof = self.profiles[name]
         if prof == "dhcp":
-            for e in (self.ipEdit, self.maskEdit, self.gatewayEdit, self.dnsEdit): e.clear()
+            for e in (self.ipEdit, self.maskEdit, self.gatewayEdit, self.dnsEdit):
+                e.clear()
             return
-        self.ipEdit.setText(prof.get("ip", "")); self.maskEdit.setText(prof.get("mask", ""))
-        self.gatewayEdit.setText(prof.get("gateway", "")); self.dnsEdit.setText(prof.get("dns", ""))
+        self.ipEdit.setText(prof.get("ip", ""))
+        self.maskEdit.setText(prof.get("mask", ""))
+        self.gatewayEdit.setText(prof.get("gateway", ""))
+        self.dnsEdit.setText(prof.get("dns", ""))
 
-    def collect_fields(self):
+    def collect_fields(self) -> dict:
         return {
             "ip": self.ipEdit.text().strip(),
             "mask": self.maskEdit.text().strip(),
             "gateway": self.gatewayEdit.text().strip(),
-            "dns": self.dnsEdit.text().strip()
+            "dns": self.dnsEdit.text().strip(),
         }
 
-    # CRUD
+    # CRUD operations
     def add_profile(self):
         name = self.profileNameEdit.text().strip()
         if not name:
@@ -178,23 +186,23 @@ class MainWindow(QMainWindow):
         if name in self.profiles:
             QMessageBox.warning(self, APP_NAME, "Profile exists – use Update.")
             return
-        self.profiles[name] = self.collect_fields(); save_profiles(self.profiles); self.refresh_profile_list()
+        self.profiles[name] = self.collect_fields()
+        save_profiles(self.profiles)
+        self.refresh_profile_list()
 
     def update_profile(self):
         name = self.profileNameEdit.text().strip()
         if not name or name not in self.profiles:
             QMessageBox.warning(self, APP_NAME, "Select existing profile first.")
             return
-        self.profiles[name] = self.collect_fields(); save_profiles(self.profiles); self.refresh_profile_list()
+        self.profiles[name] = self.collect_fields()
+        save_profiles(self.profiles)
+        self.refresh_profile_list()
 
     def delete_profile(self):
-        item = self.profileList.currentItem();
-        if not item: return
+        item = self.profileList.currentItem()
+        if not item:
+            return
         name = item.text()
         if QMessageBox.question(self, APP_NAME, f"Delete '{name}'?") == QMessageBox.Yes:
-            del self.profiles[name]; save_profiles(self.profiles); self.refresh_profile_list()
-
-    def add_dhcp_profile(self):
-        name = self.profileNameEdit.text().strip() or "DHCP"
-        if name in self.profiles:
-            QMessageBox.warning(self
+            del
