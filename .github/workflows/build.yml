@@ -2,8 +2,8 @@ name: Build Netmotive EXE
 
 on:
   push:
-    branches: [ main ]        # change if you use a different default branch
-  workflow_dispatch:          # allow manual trigger
+    branches: [ main ]         # adjust if your default branch is different
+  workflow_dispatch:           # allow manual trigger
 
 jobs:
   build:
@@ -24,30 +24,23 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
-    # 4️⃣ Build ─ include Qt “platforms” folder
-    #    We ask Python for the PySide6 plugins directory, then feed it to PyInstaller
+    # 4️⃣ Build and bundle Qt “platforms” plugin
     - name: Build EXE with Qt plugins
       shell: pwsh
       run: |
-        # Find the PySide6 plugins\platforms folder
-        $plugins = python - <<'PY'
-import sysconfig, pathlib, json, sys
-platlib = pathlib.Path(sysconfig.get_paths()['platlib'])
-print(platlib / 'PySide6' / 'plugins' / 'platforms')
-PY
+        # Find the PySide6 plugins\platforms directory
+        $pluginsDir = python -c "import sysconfig, pathlib, sys; p=pathlib.Path(sysconfig.get_paths()['platlib'])/'PySide6'/'plugins'/'platforms'; print(p)"
+        $pluginsDir = $pluginsDir.Trim()
 
-        echo "PySide6 plugins path: $plugins"
+        echo \"Qt platforms dir: $pluginsDir\"
 
-        # Build the EXE (onefile, windowed) and copy the platforms inside
-        pyinstaller `
-          --noconfirm `
-          --onefile `
-          --windowed `
-          --add-data "$plugins;platforms" `
+        # Build the EXE (one-file, windowed) with plugins bundled
+        pyinstaller --noconfirm --onefile --windowed `
+          --add-data \"$pluginsDir;platforms\" `
           netmotive_ip_range_changer.py
 
-    # 5️⃣ Upload the executable as an artifact
-    - name: Upload artifact
+    # 5️⃣ Upload the artifact
+    - name: Upload EXE
       uses: actions/upload-artifact@v4
       with:
         name: Netmotive_IP_Range_Changer
