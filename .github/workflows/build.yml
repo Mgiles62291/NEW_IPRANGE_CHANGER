@@ -2,38 +2,53 @@ name: Build Netmotive EXE
 
 on:
   push:
-    branches: [ main ]          # run on every push to main
-  workflow_dispatch:            # allow manual trigger
+    branches: [ main ]        # change if you use a different default branch
+  workflow_dispatch:          # allow manual trigger
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      # 1️⃣ Check out the repo
-      - uses: actions/checkout@v4
+    # 1️⃣ Check out your repo
+    - uses: actions/checkout@v4
 
-      # 2️⃣ Set up Python
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+    # 2️⃣ Install Python 3.11
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
 
-      # 3️⃣ Install requirements and PyInstaller
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
+    # 3️⃣ Install dependencies + PyInstaller
+    - name: Install requirements
+      run: |
+        pip install -r requirements.txt
+        pip install pyinstaller
 
-      # 4️⃣ Build single-file, windowed EXE
-      - name: Build with PyInstaller
-        run: |
-          pyinstaller --noconfirm --onefile --windowed netmotive_ip_range_changer.py
-        env:
-          PYTHONIOENCODING: utf-8
+    # 4️⃣ Build ─ include Qt “platforms” folder
+    #    We ask Python for the PySide6 plugins directory, then feed it to PyInstaller
+    - name: Build EXE with Qt plugins
+      shell: pwsh
+      run: |
+        # Find the PySide6 plugins\platforms folder
+        $plugins = python - <<'PY'
+import sysconfig, pathlib, json, sys
+platlib = pathlib.Path(sysconfig.get_paths()['platlib'])
+print(platlib / 'PySide6' / 'plugins' / 'platforms')
+PY
 
-      # 5️⃣ Upload the EXE as a workflow artifact
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Netmotive_IP_Range_Changer
-          path: dist/netmotive_ip_range_changer.exe
+        echo "PySide6 plugins path: $plugins"
+
+        # Build the EXE (onefile, windowed) and copy the platforms inside
+        pyinstaller `
+          --noconfirm `
+          --onefile `
+          --windowed `
+          --add-data "$plugins;platforms" `
+          netmotive_ip_range_changer.py
+
+    # 5️⃣ Upload the executable as an artifact
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Netmotive_IP_Range_Changer
+        path: dist/netmotive_ip_range_changer.exe
