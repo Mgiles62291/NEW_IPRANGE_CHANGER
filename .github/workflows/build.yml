@@ -1,47 +1,47 @@
 name: Build Netmotive EXE
 
 on:
-  push:
-    branches: [ main ]         # adjust if your default branch is different
-  workflow_dispatch:           # allow manual trigger
+  push:                 # build on every push to main
+    branches: [ main ]
+  workflow_dispatch:    # allow manual “Run workflow” button
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    # 1️⃣ Check out your repo
-    - uses: actions/checkout@v4
+      # 1️⃣  Check out source
+      - uses: actions/checkout@v4
 
-    # 2️⃣ Install Python 3.11
-    - uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
+      # 2️⃣  Set up Python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    # 3️⃣ Install dependencies + PyInstaller
-    - name: Install requirements
-      run: |
-        pip install -r requirements.txt
-        pip install pyinstaller
+      # 3️⃣  Install requirements & PyInstaller
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-    # 4️⃣ Build and bundle Qt “platforms” plugin
-    - name: Build EXE with Qt plugins
-      shell: pwsh
-      run: |
-        # Find the PySide6 plugins\platforms directory
-        $pluginsDir = python -c "import sysconfig, pathlib, sys; p=pathlib.Path(sysconfig.get_paths()['platlib'])/'PySide6'/'plugins'/'platforms'; print(p)"
-        $pluginsDir = $pluginsDir.Trim()
+      # 4️⃣  Build EXE and bundle Qt platform plugin
+      - name: Build with PyInstaller (Qt plugins bundled)
+        shell: pwsh
+        run: |
+          # Locate the PySide6 plugins\platforms directory
+          $pluginsDir = python -c "import sysconfig, pathlib, sys; p = pathlib.Path(sysconfig.get_paths()['platlib']) / 'PySide6' / 'plugins' / 'platforms'; print(p)"
+          $pluginsDir = $pluginsDir.Trim()
 
-        echo \"Qt platforms dir: $pluginsDir\"
+          echo \"Qt platforms dir: $pluginsDir\"
 
-        # Build the EXE (one-file, windowed) with plugins bundled
-        pyinstaller --noconfirm --onefile --windowed `
-          --add-data \"$pluginsDir;platforms\" `
-          netmotive_ip_range_changer.py
+          # Build one-file, windowed EXE, bundling the plugin directory
+          pyinstaller --noconfirm --onefile --windowed `
+            --add-data="$pluginsDir;platforms" `
+            netmotive_ip_range_changer.py
 
-    # 5️⃣ Upload the artifact
-    - name: Upload EXE
-      uses: actions/upload-artifact@v4
-      with:
-        name: Netmotive_IP_Range_Changer
-        path: dist/netmotive_ip_range_changer.exe
+      # 5️⃣  Upload artifact
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Netmotive_IP_Range_Changer
+          path: dist/netmotive_ip_range_changer.exe
